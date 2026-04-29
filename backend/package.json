@@ -1,0 +1,22 @@
+{
+  "name": "backend",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --var PUBLIC_FRONTEND_ORIGIN:http://localhost:5173 --var PUBLIC_OAUTH_REDIRECT_URI:http://localhost:8787/auth/google/callback",
+    "deploy": "wrangler deploy --minify",
+    "cf-typegen": "wrangler types --env-interface CloudflareBindings",
+    "vector:clean": "wrangler vectorize delete flare-gpt-vectors --force && wrangler vectorize create flare-gpt-vectors --dimensions=384 --metric=cosine && wrangler vectorize create-metadata-index flare-gpt-vectors --property-name=userId --type=string && wrangler vectorize create-metadata-index flare-gpt-vectors --property-name=chatId --type=string"
+  },
+  "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "drizzle-orm": "^0.45.2",
+    "hono": "^4.12.15",
+    "unpdf": "^1.6.2"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^25.6.0",
+    "wrangler": "^4.86.0"
+  }
+}

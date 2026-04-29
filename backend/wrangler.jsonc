@@ -1,0 +1,108 @@
+/**
+ * Cloudflare Worker configuration for the FlareGPT backend (API only).
+ * The frontend SPA is deployed as a separate Worker (see frontend/wrangler.jsonc).
+ *
+ * Docs: https://developers.cloudflare.com/workers/wrangler/configuration/
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "backend",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-04-28",
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"d1_databases": [
+		{
+			"binding": "flare_gpt",
+			"database_name": "flare-gpt",
+			"database_id": "b861340f-352b-4811-a825-f46ee6de18bb"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "USER_SETTINGS",
+			"id": "215bc6a0dc5c4900b2d8b9fcc357013f"
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	},
+	"vectorize": [
+		{
+			"binding": "VECTOR_INDEX",
+			"index_name": "flare-gpt-vectors",
+			"remote": true
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "DOCUMENTS_R2",
+			"bucket_name": "flare-gpt-documents"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "INDEXING_QUEUE",
+				"queue": "flare-gpt-indexing"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "flare-gpt-indexing",
+				"max_batch_size": 5,
+				"max_batch_timeout": 10,
+				"max_retries": 3,
+				"dead_letter_queue": "flare-gpt-indexing-dlq"
+			}
+		]
+	},
+	"secrets_store_secrets": [
+		{
+			"binding": "JWT_SECRET",
+			"store_id": "ca24fff65945415995121ee8cee5ae78",
+			"secret_name": "JWT_SECRET"
+		},
+		{
+			"binding": "GOOGLE_CLIENT_ID",
+			"store_id": "ca24fff65945415995121ee8cee5ae78",
+			"secret_name": "GOOGLE_CLIENT_ID"
+		},
+		{
+			"binding": "GOOGLE_CLIENT_SECRET",
+			"store_id": "ca24fff65945415995121ee8cee5ae78",
+			"secret_name": "GOOGLE_CLIENT_SECRET"
+		},
+		{
+			"binding": "GOOGLE_REDIRECT_URI",
+			"store_id": "ca24fff65945415995121ee8cee5ae78",
+			"secret_name": "GOOGLE_REDIRECT_URI"
+		},
+		{
+			"binding": "UPSTASH_REDIS_REST_TOKEN",
+			"store_id": "ca24fff65945415995121ee8cee5ae78",
+			"secret_name": "UPSTASH_REDIS_REST_TOKEN"
+		},
+		{
+			"binding": "SEARCHAPI_KEY",
+			"store_id": "ca24fff65945415995121ee8cee5ae78",
+			"secret_name": "SEARCHAPI_KEY"
+		},
+		{
+			"binding": "FRONTEND_URL",
+			"store_id": "ca24fff65945415995121ee8cee5ae78",
+			"secret_name": "FRONTEND_URL"
+		}
+	],
+	"vars": {
+		"AI_MODEL": "@cf/meta/llama-3.1-8b-instruct",
+		"UPSTASH_REDIS_REST_URL": "https://happy-rhino-108966.upstash.io",
+		"PUBLIC_FRONTEND_ORIGIN": "https://flaregpt.innovchromatic.me",
+		"PUBLIC_OAUTH_REDIRECT_URI": "https://backend.innovchromatic.me/auth/google/callback"
+	}
+}

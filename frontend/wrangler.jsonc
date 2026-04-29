@@ -1,0 +1,20 @@
+/**
+ * Cloudflare Worker configuration for the FlareGPT frontend.
+ * Static-only Worker - no `main` script, just an `assets` binding that serves
+ * the Vite build output (`./dist`). SPA history fallback routes unknown paths
+ * back to index.html so React Router works on direct loads/refreshes.
+ *
+ * Run `npm run build` in this directory before deploying.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "flaregpt-frontend",
+	"compatibility_date": "2026-04-28",
+	"assets": {
+		"directory": "./dist",
+		"not_found_handling": "single-page-application"
+	},
+	"observability": {
+		"enabled": true
+	}
+}

@@ -135,6 +135,10 @@ cd backend && npm run deploy
 cd frontend && npm run deploy
 ```
 
+## Security
+
+If Google OAuth client JSON or other third-party keys were ever committed—even briefly—[rotate those credentials](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository) in Google Cloud and elsewhere. This repository’s history was rewritten before publication to remove accidentally committed artifacts; treat any exposed secret as compromised.
+
 ## License
 
 Specify your license here if the project is public.

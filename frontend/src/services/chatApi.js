@@ -58,11 +58,12 @@ export async function deleteChat(chatId) {
     headers: getAuthHeaders()
   });
 
-  if (!res.ok) {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
     if (res.status === 401) throw new Error("Unauthorized");
-    throw new Error("Failed to delete chat");
+    throw new Error(data.error || "Failed to delete chat");
   }
-  return res.json();
+  return data;
 }
 
 export async function renameChat(chatId, title) {

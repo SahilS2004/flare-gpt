@@ -596,20 +596,25 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
       if (!String(chatId).startsWith("local-")) {
         await deleteChat(chatId);
       }
-      
-      const updatedSessions = sessions.filter(s => s.id !== chatId);
-      setSessions(updatedSessions);
+
+      let nextSessions = [];
+      setSessions((prev) => {
+        nextSessions = prev.filter((s) => s.id !== chatId);
+        return nextSessions;
+      });
 
       if (activeSessionId === chatId) {
-        if (updatedSessions.length > 0) {
-          navigate(`/chat/${updatedSessions[0].id}`);
+        setAttachments([]);
+        if (nextSessions.length > 0) {
+          navigate(`/chat/${nextSessions[0].id}`);
         } else {
           navigate("/chat");
         }
       }
+      toast.success("Conversation deleted.");
     } catch (err) {
       console.error("Failed to delete chat", err);
-      toast.error("Could not delete chat. Please try again.");
+      toast.error(err.message || "Could not delete chat. Please try again.");
     }
   }
 

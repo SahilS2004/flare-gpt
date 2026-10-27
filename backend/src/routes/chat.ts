@@ -11,6 +11,7 @@ import {
   setCachedAiResponse
 } from "../services/redis";
 import { getUserSettings } from "../services/settings";
+import { deleteDocument } from "../services/vectorize/store";
 
 function stripAttachedPdfContext(text: string): string {
   const marker = "\n\nAttached PDF context:\n";
@@ -309,13 +310,49 @@ export const chatRoute = (app: Hono) => {
         return c.json({ error: "Chat not found or unauthorized" }, 404);
       }
 
-      // Delete messages and the chat
+      // Documents FK-reference chats — remove them (and best-effort vectors/R2) first
+      // or DELETE chats fails when the conversation has uploads.
+      const { results: docs } = await c.env.flare_gpt
+        .prepare(
+          `SELECT id, file_url, total_chunks
+             FROM documents
+            WHERE chat_id = ? AND user_id = ?`
+        )
+        .bind(chatId, userId)
+        .all();
+
+      for (const doc of docs ?? []) {
+        try {
+          await deleteDocument(c.env, doc.id, Number(doc.total_chunks) || 0);
+        } catch (err) {
+          console.error("Failed to delete document vectors", { id: doc.id, err });
+        }
+        if (doc.file_url && c.env.DOCUMENTS_R2) {
+          try {
+            await c.env.DOCUMENTS_R2.delete(doc.file_url);
+          } catch (err) {
+            console.error("Failed to delete R2 object", { key: doc.file_url, err });
+          }
+        }
+      }
+
+      await c.env.flare_gpt
+        .prepare("DELETE FROM documents WHERE chat_id = ? AND user_id = ?")
+        .bind(chatId, userId)
+        .run();
       await c.env.flare_gpt.prepare("DELETE FROM messages WHERE chat_id = ?").bind(chatId).run();
-      await c.env.flare_gpt.prepare("DELETE FROM chats WHERE id = ?").bind(chatId).run();
+      await c.env.flare_gpt
+        .prepare("DELETE FROM chats WHERE id = ? AND user_id = ?")
+        .bind(chatId, userId)
+        .run();
 
       return c.json({ status: "success" });
-    } catch (e) {
-      return c.json({ error: "Failed to delete chat" }, 500);
+    } catch (e: any) {
+      console.error("Failed to delete chat:", e);
+      return c.json(
+        { error: e?.message ? `Failed to delete chat: ${e.message}` : "Failed to delete chat" },
+        500
+      );
     }
   });
 };

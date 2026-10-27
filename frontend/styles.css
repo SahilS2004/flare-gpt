@@ -403,26 +403,20 @@ input {
   border: none;
   color: var(--muted);
   cursor: pointer;
-  padding: 4px;
+  padding: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 4px;
-  opacity: 0;
+  opacity: 0.7;
   transition: all 0.2s;
   flex-shrink: 0;
   margin-left: 4px;
+  pointer-events: auto;
 }
 
-.history-delete-btn,
-.history-rename-btn {
-  opacity: 0;
-}
-
-.history-item:hover .history-delete-btn,
-.history-item:hover .history-rename-btn,
-.history-item.active .history-delete-btn,
-.history-item.active .history-rename-btn {
+.history-item:hover .history-action-btn,
+.history-item.active .history-action-btn {
   opacity: 1;
 }
 

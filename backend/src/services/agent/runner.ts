@@ -38,7 +38,8 @@ function buildSystemPrompt(
 
   if (settings.useVector) {
     lines.push(
-      "An initial vector_search already ran for this chat (scoped to user + conversation). Results appear as synthetic tool messages above — use those chunks before re-querying documents."
+      "An initial vector_search already ran for this chat (scoped to user + conversation). Results appear as synthetic tool messages above — use those chunks before re-querying documents.",
+      "If vector_search returned count 0 / empty matches, answer the user's question normally from general knowledge. Do not mention the empty search or missing documents unless they asked about their uploads."
     );
   }
 
@@ -151,6 +152,38 @@ function callSignature(call: ToolCall): string {
   return `${call.name}::${JSON.stringify(call.arguments)}`;
 }
 
+/**
+ * Workers AI now validates OpenAI-compatible tool_call shapes. Legacy
+ * `{ name, arguments }` objects fail with 8007 / missing id|type|function.
+ */
+function toOpenAiToolCall(call: ToolCall): {
+  id: string;
+  type: "function";
+  function: { name: string; arguments: string };
+} {
+  return {
+    id: call.toolCallId || `call_${crypto.randomUUID()}`,
+    type: "function",
+    function: {
+      name: call.name,
+      arguments: JSON.stringify(call.arguments ?? {})
+    }
+  };
+}
+
+function toOpenAiToolResult(
+  toolCallId: string,
+  name: string,
+  result: unknown
+): { role: "tool"; tool_call_id: string; name: string; content: string } {
+  return {
+    role: "tool",
+    tool_call_id: toolCallId,
+    name,
+    content: JSON.stringify(result)
+  };
+}
+
 async function runToolCall(
   call: ToolCall,
   registry: Record<string, ToolDefinition>,
@@ -200,6 +233,13 @@ async function seedVectorSearch(
   const sig = callSignature({ name: "vector_search", arguments: args });
   seenSignatures.add(sig);
 
+  const seededCall: ToolCall = {
+    name: "vector_search",
+    arguments: args,
+    toolCallId: `call_seed_vector_${crypto.randomUUID()}`
+  };
+  const openAiCall = toOpenAiToolCall(seededCall);
+
   try {
     const result = await tool.handler(args, ctx);
     toolsUsed.push({ name: "vector_search", arguments: args, result });
@@ -207,13 +247,11 @@ async function seedVectorSearch(
     conversation.push({
       role: "assistant",
       content: "",
-      tool_calls: [{ name: "vector_search", arguments: args }]
+      tool_calls: [openAiCall]
     });
-    conversation.push({
-      role: "tool",
-      name: "vector_search",
-      content: JSON.stringify(result)
-    });
+    conversation.push(
+      toOpenAiToolResult(openAiCall.id, "vector_search", result)
+    );
   } catch (error: any) {
     console.error("Agent: vector_search seed failed", error);
     const errResult = { error: error?.message ?? "vector_search failed." };
@@ -221,13 +259,11 @@ async function seedVectorSearch(
     conversation.push({
       role: "assistant",
       content: "",
-      tool_calls: [{ name: "vector_search", arguments: args }]
+      tool_calls: [openAiCall]
     });
-    conversation.push({
-      role: "tool",
-      name: "vector_search",
-      content: JSON.stringify(errResult)
-    });
+    conversation.push(
+      toOpenAiToolResult(openAiCall.id, "vector_search", errResult)
+    );
   }
 }
 
@@ -299,27 +335,29 @@ export async function runAgent(
       break;
     }
 
+    const openAiCalls = fresh.map((call) => toOpenAiToolCall(call));
     conversation.push({
       role: "assistant",
       content: responseText,
-      tool_calls: fresh.map((call) => ({
-        ...(call.toolCallId ? { id: call.toolCallId } : {}),
-        name: call.name,
-        arguments: call.arguments
-      }))
+      tool_calls: openAiCalls
     });
 
     const executions = await Promise.all(
-      fresh.map((call) => runToolCall(call, handlersByName, ctx))
+      fresh.map((call, index) =>
+        runToolCall(
+          { ...call, toolCallId: openAiCalls[index].id },
+          handlersByName,
+          ctx
+        )
+      )
     );
 
-    for (const execution of executions) {
+    for (let i = 0; i < executions.length; i++) {
+      const execution = executions[i];
       toolsUsed.push(execution);
-      conversation.push({
-        role: "tool",
-        name: execution.name,
-        content: JSON.stringify(execution.result)
-      });
+      conversation.push(
+        toOpenAiToolResult(openAiCalls[i].id, execution.name, execution.result)
+      );
     }
   }
 

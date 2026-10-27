@@ -1,0 +1,72 @@
+/**
+ * Local-only Wrangler config: same as wrangler.jsonc but without Secrets Store
+ * bindings so `.dev.vars` plain strings are used (Secrets Store .get() fails locally
+ * when secrets are not populated in the store).
+ *
+ * Production deploy still uses wrangler.jsonc.
+ */
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "backend",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-04-28",
+	"observability": {
+		"enabled": true
+	},
+	"upload_source_maps": true,
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"d1_databases": [
+		{
+			"binding": "flare_gpt",
+			"database_name": "flare-gpt",
+			"database_id": "b861340f-352b-4811-a825-f46ee6de18bb"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "USER_SETTINGS",
+			"id": "215bc6a0dc5c4900b2d8b9fcc357013f"
+		}
+	],
+	"ai": {
+		"binding": "AI"
+	},
+	"vectorize": [
+		{
+			"binding": "VECTOR_INDEX",
+			"index_name": "flare-gpt-vectors",
+			"remote": true
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "DOCUMENTS_R2",
+			"bucket_name": "flare-gpt-documents"
+		}
+	],
+	"queues": {
+		"producers": [
+			{
+				"binding": "INDEXING_QUEUE",
+				"queue": "flare-gpt-indexing"
+			}
+		],
+		"consumers": [
+			{
+				"queue": "flare-gpt-indexing",
+				"max_batch_size": 5,
+				"max_batch_timeout": 10,
+				"max_retries": 3,
+				"dead_letter_queue": "flare-gpt-indexing-dlq"
+			}
+		]
+	},
+	"vars": {
+		"AI_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
+		"UPSTASH_REDIS_REST_URL": "https://happy-rhino-108966.upstash.io",
+		"PUBLIC_FRONTEND_ORIGIN": "http://localhost:5173",
+		"PUBLIC_OAUTH_REDIRECT_URI": "http://localhost:8787/auth/google/callback"
+	}
+}

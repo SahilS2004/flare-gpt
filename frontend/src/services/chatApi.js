@@ -85,10 +85,30 @@ export async function transcribeAudio(audioBlob) {
   return res.json();
 }
 
-export async function uploadDocument(file, chatId = null) {
+/** Persist a new empty chat so document uploads can bind vectors to chatId. */
+export async function createChat(title = "New chat") {
+  const res = await fetch(`${API}/chats`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ title })
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    if (res.status === 401) throw new Error("Unauthorized");
+    throw new Error(data.error || "Failed to create chat");
+  }
+  return data;
+}
+
+export async function uploadDocument(file, chatId) {
+  if (!chatId || String(chatId).startsWith("local-")) {
+    throw new Error("Open or create a conversation before uploading a document.");
+  }
+
   const formData = new FormData();
   formData.append("file", file);
-  if (chatId) formData.append("chatId", chatId);
+  formData.append("chatId", chatId);
 
   const res = await fetch(`${API}/upload-document`, {
     method: "POST",
@@ -98,12 +118,13 @@ export async function uploadDocument(file, chatId = null) {
     body: formData
   });
 
-  if (!res.ok) {
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
     if (res.status === 401) throw new Error("Unauthorized");
-    throw new Error("Failed to upload document");
+    throw new Error(data.error || "Failed to upload document");
   }
 
-  return res.json();
+  return data;
 }
 
 /** Poll indexing progress after async upload/indexing pipeline. */

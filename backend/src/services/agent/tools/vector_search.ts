@@ -28,6 +28,11 @@ export const vectorSearchTool: ToolDefinition = {
     if (!query) {
       throw new Error("Missing required 'query' argument.");
     }
+    if (!ctx.chatId || String(ctx.chatId).startsWith("local-")) {
+      throw new Error(
+        "vector_search requires an active conversation id; results are restricted to that chat only."
+      );
+    }
 
     const topK = Number(args?.topK);
     const matches = await searchDocuments(ctx.env, {

@@ -156,6 +156,40 @@ export const chatRoute = (app: Hono) => {
     }
   });
 
+  /** Create an empty chat so uploads can bind vectors to a real conversation id. */
+  app.post("/chats", async (c: any) => {
+    const payload = c.get("jwtPayload");
+    if (!payload || !payload.id) {
+      return c.json({ error: "Unauthorized access" }, 401);
+    }
+
+    const userId = payload.id;
+    let title = "New chat";
+    try {
+      const body = await c.req.json().catch(() => ({}));
+      const raw = typeof body?.title === "string" ? body.title.trim() : "";
+      if (raw) title = raw.slice(0, 64);
+    } catch {
+      // keep default title
+    }
+
+    const chatId = crypto.randomUUID();
+    try {
+      await c.env.flare_gpt
+        .prepare("INSERT INTO chats (id, user_id, title) VALUES (?, ?, ?)")
+        .bind(chatId, userId, title)
+        .run();
+
+      return c.json({
+        status: "success",
+        data: { id: chatId, title }
+      });
+    } catch (e) {
+      console.error("Failed to create chat:", e);
+      return c.json({ error: "Failed to create chat" }, 500);
+    }
+  });
+
   app.get("/history", async (c: any) => {
     const payload = c.get('jwtPayload');
     if (!payload || !payload.id) {

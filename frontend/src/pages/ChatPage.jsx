@@ -8,6 +8,7 @@ import {
   fetchChatMessages,
   deleteChat,
   uploadDocument,
+  createChat,
   fetchDocumentStatus,
   fetchUserSettings,
   updateUserSettings
@@ -413,12 +414,38 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
 
   async function handlePdfPick(file) {
     if (!file) return;
+    if (!activeSessionId) {
+      toast.error("Open a conversation before uploading a document.");
+      return;
+    }
 
     const toastId = toast.loading("Uploading file…");
-    uploadAnchorSessionRef.current = activeSessionId;
     try {
-      const isLocal = String(activeSessionId).startsWith("local-");
-      const result = await uploadDocument(file, isLocal ? null : activeSessionId);
+      // Vectors are scoped by chatId. Promote local draft chats to a real server
+      // chat before upload so retrieval stays conversation-only.
+      let chatId = activeSessionId;
+      if (String(chatId).startsWith("local-")) {
+        const created = await createChat(
+          file.name ? `Chat · ${String(file.name).slice(0, 40)}` : "New chat"
+        );
+        const realId = created?.data?.id;
+        if (!realId) throw new Error("Failed to create conversation for upload.");
+
+        const previousId = chatId;
+        setSessions((prev) =>
+          prev.map((session) =>
+            session.id === previousId
+              ? { ...session, id: realId, title: created.data.title || session.title }
+              : session
+          )
+        );
+        setActiveSessionId(realId);
+        navigate(`/chat/${realId}`, { replace: true });
+        chatId = realId;
+      }
+
+      uploadAnchorSessionRef.current = chatId;
+      const result = await uploadDocument(file, chatId);
       toast.dismiss(toastId);
 
       const data = result?.data ?? {};

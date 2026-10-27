@@ -86,9 +86,34 @@ export async function processIndexingJob(
       bytes: data.byteLength
     });
 
+    // Prefer D1 chat_id so vector metadata always matches the conversation row
+    // even if the queue payload was stale or missing chatId.
+    const docRow = (await env.flare_gpt
+      .prepare("SELECT chat_id, user_id FROM documents WHERE id = ?")
+      .bind(payload.documentId)
+      .first()) as { chat_id: string | null; user_id: string } | null;
+
+    const chatId =
+      (typeof docRow?.chat_id === "string" && docRow.chat_id.trim()) ||
+      (typeof payload.chatId === "string" && payload.chatId.trim()) ||
+      null;
+    const userId = docRow?.user_id || payload.userId;
+
+    if (!chatId) {
+      throw new Error(
+        `Document ${payload.documentId} has no chat_id; refusing to index unscoped vectors.`
+      );
+    }
+
+    console.log("Queue: indexing with chat scope", {
+      documentId: payload.documentId,
+      chatId,
+      userId
+    });
+
     const result = await indexDocument(env, {
-      userId: payload.userId,
-      chatId: payload.chatId,
+      userId,
+      chatId,
       documentId: payload.documentId,
       fileName: payload.fileName,
       fileType: payload.fileType,

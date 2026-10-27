@@ -151,9 +151,18 @@ export async function searchDocuments(
   if (!query) return [];
 
   const topK = clampTopK(options.topK);
-  const vector = await embedQuery(env, query);
-
   const chatScope = vectorChatScope(options.chatId ?? null);
+  // Refuse unscoped retrieval — uploads without a real chat id used to land as
+  // "none" and could otherwise bleed across conversations.
+  if (!options.userId || chatScope === "none") {
+    console.warn("Vectorize search refused: missing userId or chatId scope", {
+      userId: options.userId,
+      chatId: options.chatId ?? null
+    });
+    return [];
+  }
+
+  const vector = await embedQuery(env, query);
 
   const filter: Record<string, unknown> = {
     userId: { $eq: options.userId },

@@ -21,15 +21,34 @@ export const uploadRoute = (app: Hono) => {
 
     const body = await c.req.parseBody();
     const file = body["file"] as File;
-    const chatId = (body["chatId"] as string) || null;
+    const chatIdRaw = typeof body["chatId"] === "string" ? body["chatId"].trim() : "";
+    const chatId = chatIdRaw || null;
 
     if (!file) return c.json({ error: "No file provided" }, 400);
+    // Vectors are filtered by chatId at retrieval time — never index without one.
+    if (!chatId || chatId.startsWith("local-")) {
+      return c.json(
+        {
+          error:
+            "chatId is required. Create or open a conversation before uploading so the document is scoped to that chat only."
+        },
+        400
+      );
+    }
 
     if (!c.env.DOCUMENTS_R2) {
       return c.json({ error: "R2 storage is not configured." }, 500);
     }
 
     try {
+      const chat = await c.env.flare_gpt
+        .prepare("SELECT id FROM chats WHERE id = ? AND user_id = ?")
+        .bind(chatId, userId)
+        .first();
+      if (!chat) {
+        return c.json({ error: "Chat not found or unauthorized" }, 404);
+      }
+
       const arrayBuffer = await file.arrayBuffer();
 
       const documentId = crypto.randomUUID();
@@ -43,7 +62,7 @@ export const uploadRoute = (app: Hono) => {
           userId,
           documentId,
           fileName: file.name,
-          chatId: chatId ?? "none"
+          chatId
         }
       });
 
@@ -87,6 +106,7 @@ export const uploadRoute = (app: Hono) => {
             status: "partial",
             data: {
               documentId,
+              chatId,
               url: `/documents/${documentId}`,
               name: file.name,
               indexingStatus: "failed",
@@ -102,6 +122,7 @@ export const uploadRoute = (app: Hono) => {
         status: "success",
         data: {
           documentId,
+          chatId,
           url: `/documents/${documentId}`,
           name: file.name,
           indexingStatus: "pending"

@@ -1,6 +1,5 @@
 import type { UserSettings } from "../settings";
 import { buildToolRegistry, indexByName, toToolSchema } from "./registry";
-import { sanitizeAssistantText } from "./sanitize";
 import type {
   AgentInput,
   AgentResult,
@@ -11,10 +10,10 @@ import type {
 
 const MAX_ITERATIONS = 8;
 const MAX_HISTORY_MESSAGES = 8;
-const AGENT_LOOP_TEMPERATURE = 0.2;
-const FINAL_SYNTHESIS_TEMPERATURE = 0.45;
+const AGENT_LOOP_TEMPERATURE = 0.35;
+const FINAL_SYNTHESIS_TEMPERATURE = 0.55;
 const FINAL_SYNTHESIS_HINT =
-  "Write ONLY the final user-facing reply in markdown. Do not mention tools, planning, searches, or intermediate steps. Do not call any more tools.";
+  "Now write the final reply for the user as plain markdown. Do not call any more tools.";
 
 function buildSystemPrompt(
   settings: UserSettings,
@@ -25,22 +24,15 @@ function buildSystemPrompt(
     .join("\n");
 
   const lines = [
-    "You are FlareGPT, an assistant that MUST use the provided tools via native function calls whenever they apply.",
-    "Never invent tool results. Never skip a relevant tool.",
-    "When a suitable tool exists, CALL IT before answering — do not estimate in natural language.",
-    "You may call multiple tools in one turn when independent; otherwise call them in dependency order.",
+    "You are FlareGPT, orchestrating callable tools—you do not hallucinate factual or numeric answers when a tool covers them.",
+    "When a suitable tool exists, CALL IT BEFORE answering rather than estimating in natural language.",
+    "Call tools sequentially when one depends on another; when independent you may invoke multiple tools in one turn.",
+    "After receiving tool outputs, summarise clearly in markdown.",
     "",
-    "**Output rules (critical):**",
-    "- Never reveal chain-of-thought, planning, or which tool you will call.",
-    "- Never narrate steps like \"I'll search\" / \"Let me use the calculator\".",
-    "- User-visible text must be the final answer only (clean markdown).",
-    "",
-    "**Hard routing:**",
-    "- Arithmetic / numbers / percentages / powers / roots → **calculator** (`expression`).",
-    "- Current events, news, live prices, citations, post-cutoff facts → **web_search** (`query`).",
-    "- Weather for a place → **weather**.",
-    "- Timers → **create_timer**; schedules → **create_schedule**.",
-    "- Past turns in this chat (when Redis is on) → **redis_memory_lookup**.",
+    "**Hard routing (follow these priorities):**",
+    "- Arithmetic, any non-trivial numbers, percentages, averages, powers, roots: use **calculator** with a single `expression` string (never guess products or large divisions).",
+    "- Current information, news, recent events, live prices, anything after your knowledge cutoff, or anything requiring citations/sources: use **web_search** with a focused `query` first.",
+    "- Timers/schedules/redis/weather: use those tools directly when requested.",
     "- Uploaded documents in THIS chat → **vector_search** (also pre-seeded below when enabled).",
     "Do not invent tools that are not listed below."
   ];
@@ -48,27 +40,52 @@ function buildSystemPrompt(
   if (settings.useVector) {
     lines.push(
       "An initial vector_search already ran for this chat (scoped to user + conversation). Results appear as synthetic tool messages above — use those chunks before re-querying documents.",
-      "If vector_search returned count 0 / empty matches, answer normally from general knowledge. Do not mention empty search or missing documents unless the user asked about uploads."
+      "If vector_search returned count 0 / empty matches, answer the user's question normally from general knowledge. Do not mention the empty search or missing documents unless they asked about their uploads."
     );
   }
 
   lines.push(
     "",
-    "Available tools (use them via function calls):",
+    "Available tools:",
     toolList,
     "",
-    `Flags: useRedis=${settings.useRedis}, useVector=${settings.useVector}.`
+    `User feature flags: useRedis=${settings.useRedis}, useVector=${settings.useVector}, microphoneEnabled=${settings.microphoneEnabled}.`
   );
 
   return lines.join("\n");
 }
 
-function finalizeReply(text: string, toolsUsed: ToolExecution[]): AgentResult {
-  const cleaned = sanitizeAssistantText(text);
-  return {
-    text: cleaned || "I could not produce a response. Please try again.",
-    toolsUsed
-  };
+/** Pull assistant text from Workers AI payloads (shape varies by model). */
+function extractResponseText(response: unknown): string {
+  if (!response) return "";
+  if (typeof response === "string") return response.trim();
+  if (typeof response !== "object") return "";
+  const root = response as Record<string, unknown>;
+
+  const direct = root.response ?? root.text ?? root.content ?? root.result;
+  if (typeof direct === "string" && direct.trim()) return direct.trim();
+
+  if (Array.isArray(root.output)) {
+    const parts: string[] = [];
+    for (const item of root.output) {
+      if (!item || typeof item !== "object") continue;
+      const entry = item as Record<string, unknown>;
+      if (typeof entry.content === "string") parts.push(entry.content);
+      else if (typeof entry.text === "string") parts.push(entry.text);
+    }
+    if (parts.length) return parts.join("\n").trim();
+  }
+
+  if (Array.isArray(root.choices)) {
+    const first = root.choices[0] as Record<string, unknown> | undefined;
+    const msg = first?.message;
+    if (msg && typeof msg === "object") {
+      const content = (msg as Record<string, unknown>).content;
+      if (typeof content === "string" && content.trim()) return content.trim();
+    }
+  }
+
+  return "";
 }
 
 /**
@@ -331,11 +348,11 @@ export async function runAgent(
     }
 
     const toolCalls = collectAiToolCalls(response);
-    const responseText = String(response?.response ?? "").trim();
+    const responseText = extractResponseText(response);
 
     if (toolCalls.length === 0) {
       if (responseText) {
-        return finalizeReply(responseText, toolsUsed);
+        return { text: responseText, toolsUsed };
       }
       break;
     }
@@ -349,15 +366,13 @@ export async function runAgent(
     }
 
     if (fresh.length === 0) {
-      // Model repeated prior tool calls — synthesize from what we already have.
       break;
     }
 
     const openAiCalls = fresh.map((call) => toOpenAiToolCall(call));
-    // Keep tool-call turns silent so planning text never leaks into synthesis.
     conversation.push({
       role: "assistant",
-      content: "",
+      content: responseText,
       tool_calls: openAiCalls
     });
 
@@ -389,10 +404,16 @@ export async function runAgent(
       max_tokens: 1024,
       temperature: FINAL_SYNTHESIS_TEMPERATURE
     });
-    const finalText = String(final?.response ?? "").trim();
-    return finalizeReply(finalText, toolsUsed);
+    const finalText = extractResponseText(final);
+    return {
+      text: finalText || "I could not produce a response. Please try again.",
+      toolsUsed
+    };
   } catch (error) {
     console.error("Agent: final synthesis failed", error);
-    return finalizeReply("", toolsUsed);
+    return {
+      text: "I could not produce a response. Please try again.",
+      toolsUsed
+    };
   }
 }

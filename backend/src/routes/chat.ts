@@ -124,9 +124,8 @@ export const chatRoute = (app: Hono) => {
           });
           const fullReply = aiResult.text;
           console.log("AI tools used:", aiResult.toolsUsed.map((t) => t.name));
-          // Never stream tool traces / thoughts to the client — answer text only.
           await stream.writeSSE({
-            data: JSON.stringify({ text: fullReply, chatId }),
+            data: JSON.stringify({ text: fullReply, chatId, toolsUsed: aiResult.toolsUsed }),
             event: "message"
           });
 

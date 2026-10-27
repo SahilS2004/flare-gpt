@@ -398,7 +398,7 @@ input {
   text-overflow: ellipsis;
 }
 
-.history-delete-btn {
+.history-action-btn {
   background: none;
   border: none;
   color: var(--muted);
@@ -411,16 +411,67 @@ input {
   opacity: 0;
   transition: all 0.2s;
   flex-shrink: 0;
-  margin-left: 8px;
+  margin-left: 4px;
 }
 
-.history-item:hover .history-delete-btn {
+.history-delete-btn,
+.history-rename-btn {
+  opacity: 0;
+}
+
+.history-item:hover .history-delete-btn,
+.history-item:hover .history-rename-btn,
+.history-item.active .history-delete-btn,
+.history-item.active .history-rename-btn {
   opacity: 1;
+}
+
+.history-rename-btn:hover {
+  color: var(--text);
+  background: var(--surface-hover);
 }
 
 .history-delete-btn:hover {
   color: #ff4d4f;
   background: rgba(255, 77, 79, 0.1);
+}
+
+.history-rename-form {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+}
+
+.history-rename-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-light);
+  background: var(--surface);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 0.85rem;
+}
+
+.history-rename-form .history-action-btn {
+  opacity: 1;
+}
+
+.attached-files-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.upload-file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  margin: 12px 0;
 }
 
 .history-item:hover {

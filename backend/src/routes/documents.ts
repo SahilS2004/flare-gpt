@@ -8,6 +8,54 @@ import { Hono } from "hono";
  * Range requests are passed straight through so PDFs/videos can be ranged.
  */
 export const documentsRoute = (app: Hono) => {
+  /** List documents pinned to a conversation (multi-file support). */
+  app.get("/chats/:chatId/documents", async (c: any) => {
+    const payload = c.get("jwtPayload");
+    if (!payload || !payload.id) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    const userId = payload.id;
+    const chatId = c.req.param("chatId");
+
+    const chat = await c.env.flare_gpt
+      .prepare("SELECT id FROM chats WHERE id = ? AND user_id = ?")
+      .bind(chatId, userId)
+      .first();
+    if (!chat) {
+      return c.json({ error: "Chat not found or unauthorized" }, 404);
+    }
+
+    try {
+      const { results } = await c.env.flare_gpt
+        .prepare(
+          `SELECT id, file_name, indexing_status, indexed_chunks, total_chunks,
+                  indexing_error, indexed_at, created_at
+             FROM documents
+            WHERE user_id = ? AND chat_id = ?
+            ORDER BY created_at ASC`
+        )
+        .bind(userId, chatId)
+        .all();
+
+      return c.json({
+        status: "success",
+        data: (results ?? []).map((row: any) => ({
+          documentId: row.id,
+          name: row.file_name,
+          indexingStatus: row.indexing_status,
+          indexedChunks: row.indexed_chunks ?? 0,
+          totalChunks: row.total_chunks ?? 0,
+          indexingError: row.indexing_error,
+          indexedAt: row.indexed_at,
+          createdAt: row.created_at
+        }))
+      });
+    } catch (error: any) {
+      console.error("Failed to list chat documents:", error);
+      return c.json({ error: "Failed to list documents" }, 500);
+    }
+  });
+
   app.get("/documents/:id", async (c: any) => {
     const payload = c.get("jwtPayload");
     if (!payload || !payload.id) {

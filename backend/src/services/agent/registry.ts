@@ -13,6 +13,7 @@ import type { ToolDefinition } from "./types";
  * applied here so disabled tools never reach the model.
  */
 export function buildToolRegistry(settings: UserSettings): ToolDefinition[] {
+  // Core tools are always available so the agent can route correctly.
   const tools: ToolDefinition[] = [
     calculatorTool,
     weatherTool,
@@ -21,11 +22,13 @@ export function buildToolRegistry(settings: UserSettings): ToolDefinition[] {
     createScheduleTool
   ];
 
-  if (settings.useVector) {
+  // Document RAG stays opt-out via settings, but defaults on.
+  if (settings.useVector !== false) {
     tools.push(vectorSearchTool);
   }
 
-  if (settings.useRedis) {
+  // Redis memory stays opt-out via settings, but defaults on.
+  if (settings.useRedis !== false) {
     tools.push(redisMemoryLookupTool);
   }
 

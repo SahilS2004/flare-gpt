@@ -65,6 +65,34 @@ export async function deleteChat(chatId) {
   return res.json();
 }
 
+export async function renameChat(chatId, title) {
+  const res = await fetch(`${API}/history/${chatId}`, {
+    method: "PATCH",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ title })
+  });
+
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || data.error) {
+    if (res.status === 401) throw new Error("Unauthorized");
+    throw new Error(data.error || "Failed to rename chat");
+  }
+  return data;
+}
+
+export async function fetchChatDocuments(chatId) {
+  const res = await fetch(`${API}/chats/${encodeURIComponent(chatId)}/documents`, {
+    method: "GET",
+    headers: getAuthHeaders()
+  });
+
+  if (!res.ok) {
+    if (res.status === 401) throw new Error("Unauthorized");
+    throw new Error("Failed to fetch chat documents");
+  }
+  return res.json();
+}
+
 export async function transcribeAudio(audioBlob) {
   const formData = new FormData();
   formData.append("audio", audioBlob, "recording.webm");

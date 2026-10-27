@@ -124,8 +124,9 @@ export const chatRoute = (app: Hono) => {
           });
           const fullReply = aiResult.text;
           console.log("AI tools used:", aiResult.toolsUsed.map((t) => t.name));
+          // Never stream tool traces / thoughts to the client — answer text only.
           await stream.writeSSE({
-            data: JSON.stringify({ text: fullReply, chatId, toolsUsed: aiResult.toolsUsed }),
+            data: JSON.stringify({ text: fullReply, chatId }),
             event: "message"
           });
 
@@ -242,6 +243,52 @@ export const chatRoute = (app: Hono) => {
       });
     } catch (e) {
       return c.json({ error: "Failed to fetch messages" }, 500);
+    }
+  });
+
+  app.patch("/history/:chatId", async (c: any) => {
+    const payload = c.get("jwtPayload");
+    if (!payload || !payload.id) {
+      return c.json({ error: "Unauthorized access" }, 401);
+    }
+    const userId = payload.id;
+    const chatId = c.req.param("chatId");
+
+    let title = "";
+    try {
+      const body = await c.req.json();
+      title = typeof body?.title === "string" ? body.title.trim() : "";
+    } catch {
+      return c.json({ error: "Invalid JSON body" }, 400);
+    }
+
+    if (!title) {
+      return c.json({ error: "Title is required" }, 400);
+    }
+    title = title.slice(0, 64);
+
+    try {
+      const chat = await c.env.flare_gpt
+        .prepare("SELECT id FROM chats WHERE id = ? AND user_id = ?")
+        .bind(chatId, userId)
+        .first();
+
+      if (!chat) {
+        return c.json({ error: "Chat not found or unauthorized" }, 404);
+      }
+
+      await c.env.flare_gpt
+        .prepare("UPDATE chats SET title = ? WHERE id = ? AND user_id = ?")
+        .bind(title, chatId, userId)
+        .run();
+
+      return c.json({
+        status: "success",
+        data: { id: chatId, title }
+      });
+    } catch (e) {
+      console.error("Failed to rename chat:", e);
+      return c.json({ error: "Failed to rename chat" }, 500);
     }
   });
 

@@ -7,9 +7,11 @@ import {
   fetchHistory,
   fetchChatMessages,
   deleteChat,
+  renameChat,
   uploadDocument,
   createChat,
   fetchDocumentStatus,
+  fetchChatDocuments,
   fetchUserSettings,
   updateUserSettings
 } from "../services/chatApi";
@@ -22,8 +24,25 @@ function buildAssistantMessage(text) {
   return { id: crypto.randomUUID(), role: "assistant", text };
 }
 
-function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function mapDocumentsToAttachments(docs = []) {
+  return docs.map((doc) => {
+    const status = doc.indexingStatus;
+    const indexingLoading = status === "pending" || !status;
+    const indexingError = status === "failed" ? doc.indexingError || "Indexing failed." : null;
+    const indexingWarn =
+      status === "deferred" || status === "skipped"
+        ? doc.indexingError || (status === "skipped" ? "No searchable text extracted." : "Indexing deferred.")
+        : null;
+    return {
+      name: doc.name,
+      documentId: doc.documentId,
+      indexingLoading,
+      indexingReady: status === "completed",
+      indexingError,
+      indexingWarn,
+      chunks: doc.indexedChunks ?? 0
+    };
+  });
 }
 
 export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
@@ -33,7 +52,7 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
   const [loading, setLoading] = useState(false);
   const [sessions, setSessions] = useState([]);
   const [activeSessionId, setActiveSessionId] = useState(null);
-  const [attachment, setAttachment] = useState(null);
+  const [attachments, setAttachments] = useState([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isDesktopCollapsed, setIsDesktopCollapsed] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -45,7 +64,6 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
     sidebarCollapsed: false
   });
   const messagesRef = useRef(null);
-  const initializedRef = useRef(false);
   /** Session that triggered the upload; pinned notice is appended there when indexing completes. */
   const uploadAnchorSessionRef = useRef(null);
 
@@ -181,16 +199,30 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
 
   function createNewChat() {
     navigate("/chat");
-    setAttachment(null);
+    setAttachments([]);
     setSidebarOpen(false);
+  }
+
+  async function loadChatDocuments(chatId) {
+    if (!chatId || String(chatId).startsWith("local-")) {
+      setAttachments([]);
+      return;
+    }
+    try {
+      const res = await fetchChatDocuments(chatId);
+      setAttachments(mapDocumentsToAttachments(res?.data || []));
+    } catch (error) {
+      console.error("Failed to load chat documents", error);
+      setAttachments([]);
+    }
   }
 
   async function sendMessage(message) {
     const trimmed = message.trim();
     if (!trimmed || !activeSessionId) return;
 
-    if (attachment?.indexingLoading) {
-      toast.error("Wait until indexing finishes for the pinned document.");
+    if (attachments.some((item) => item.indexingLoading)) {
+      toast.error("Wait until indexing finishes for all pinned documents.");
       return;
     }
 
@@ -276,23 +308,34 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
       toast.error(error.message || "Failed to send message. Please try again.");
     } finally {
       setLoading(false);
-      setAttachment(null);
       uploadAnchorSessionRef.current = null;
     }
   }
 
-  // Poll indexing until D1 marks the document completed (or terminal failure/skip).
+  const pendingIndexingKey = useMemo(
+    () =>
+      attachments
+        .filter((item) => item.indexingLoading && item.documentId)
+        .map((item) => item.documentId)
+        .sort()
+        .join(","),
+    [attachments]
+  );
+
+  // Poll every attachment that is still indexing.
   useEffect(() => {
-    const docId = attachment?.documentId;
-    const indexingLoading = attachment?.indexingLoading;
-    if (!docId || !indexingLoading) return undefined;
+    if (!pendingIndexingKey) return undefined;
+    const pendingIds = pendingIndexingKey.split(",").filter(Boolean);
+    const pending = pendingIds
+      .map((documentId) => attachments.find((item) => item.documentId === documentId))
+      .filter(Boolean);
+    if (pending.length === 0) return undefined;
 
-    const fileLabel = attachment.name;
     let cancelled = false;
-    let timeoutId;
+    const timers = new Map();
 
-    function appendPinnedNotice() {
-      const targetId = uploadAnchorSessionRef.current;
+    function appendPinnedNotice(fileLabel) {
+      const targetId = uploadAnchorSessionRef.current || activeSessionId;
       if (!targetId) return;
       setSessions((prev) =>
         prev.map((session) =>
@@ -313,78 +356,81 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
       );
     }
 
-    async function poll() {
+    function updateAttachment(docId, patch) {
+      setAttachments((prev) =>
+        prev.map((item) => (item.documentId === docId ? { ...item, ...patch } : item))
+      );
+    }
+
+    async function pollOne(doc) {
       if (cancelled) return;
       try {
-        const res = await fetchDocumentStatus(docId);
+        const res = await fetchDocumentStatus(doc.documentId);
         if (cancelled) return;
         const status = res?.data?.indexingStatus;
         if (status === "completed") {
-          setAttachment((prev) => {
-            if (!prev || prev.documentId !== docId) return prev;
-            return {
-              ...prev,
-              indexingLoading: false,
-              indexingReady: true,
-              indexingError: null,
-              indexingWarn: null,
-              chunks: res?.data?.indexedChunks ?? 0
-            };
+          updateAttachment(doc.documentId, {
+            indexingLoading: false,
+            indexingReady: true,
+            indexingError: null,
+            indexingWarn: null,
+            chunks: res?.data?.indexedChunks ?? 0
           });
-          appendPinnedNotice();
-          toast.success("Document indexed — ready for search.");
+          appendPinnedNotice(doc.name);
+          toast.success(`${doc.name} indexed.`);
           return;
         }
         if (status === "failed") {
           const errMsg = res?.data?.indexingError || "Indexing failed.";
-          setAttachment((prev) => {
-            if (!prev || prev.documentId !== docId) return prev;
-            return {
-              ...prev,
-              indexingLoading: false,
-              indexingReady: false,
-              indexingError: errMsg
-            };
+          updateAttachment(doc.documentId, {
+            indexingLoading: false,
+            indexingReady: false,
+            indexingError: errMsg
           });
-          toast.error(errMsg);
+          toast.error(`${doc.name}: ${errMsg}`);
           return;
         }
         if (status === "deferred" || status === "skipped") {
           const reason = res?.data?.indexingError || res?.data?.reason;
-          setAttachment((prev) => {
-            if (!prev || prev.documentId !== docId) return prev;
-            return {
-              ...prev,
-              indexingLoading: false,
-              indexingReady: false,
-              indexingWarn:
-                reason ||
-                (status === "skipped"
-                  ? "No searchable text extracted."
-                  : "Indexing deferred.")
-            };
+          updateAttachment(doc.documentId, {
+            indexingLoading: false,
+            indexingReady: false,
+            indexingWarn:
+              reason ||
+              (status === "skipped" ? "No searchable text extracted." : "Indexing deferred.")
           });
-          appendPinnedNotice();
-          toast(reason ? String(reason) : `Document status: ${status}`);
+          appendPinnedNotice(doc.name);
+          toast(reason ? String(reason) : `${doc.name}: ${status}`);
           return;
         }
-        timeoutId = window.setTimeout(() => {
-          poll();
-        }, 2000);
+        timers.set(
+          doc.documentId,
+          window.setTimeout(() => pollOne(doc), 2000)
+        );
       } catch (_) {
         if (cancelled) return;
-        timeoutId = window.setTimeout(() => {
-          poll();
-        }, 3000);
+        timers.set(
+          doc.documentId,
+          window.setTimeout(() => pollOne(doc), 3000)
+        );
       }
     }
 
-    poll();
+    for (const doc of pending) {
+      pollOne(doc);
+    }
+
     return () => {
       cancelled = true;
-      if (timeoutId) window.clearTimeout(timeoutId);
+      for (const timer of timers.values()) window.clearTimeout(timer);
     };
-  }, [attachment?.documentId, attachment?.indexingLoading, attachment?.name]);
+    // pendingIndexingKey intentionally drives restarts; snapshot `pending` at effect start.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingIndexingKey, activeSessionId]);
+
+  useEffect(() => {
+    loadChatDocuments(activeSessionId);
+  }, [activeSessionId]);
 
   async function persistSettings(nextSettings) {
     setUserSettings(nextSettings);
@@ -419,7 +465,7 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
       return;
     }
 
-    const toastId = toast.loading("Uploading file…");
+    const toastId = toast.loading(`Uploading ${file.name}…`);
     try {
       // Vectors are scoped by chatId. Promote local draft chats to a real server
       // chat before upload so retrieval stays conversation-only.
@@ -452,46 +498,42 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
       const immediateStatus = data.indexingStatus;
       const documentId = data.documentId;
 
+      const nextAttachment = {
+        name: file.name,
+        documentId,
+        indexingLoading: immediateStatus !== "completed" && immediateStatus !== "failed",
+        indexingReady: immediateStatus === "completed",
+        indexingError:
+          immediateStatus === "failed" || result?.status === "partial"
+            ? data.indexingError || "Indexing could not be queued."
+            : null,
+        indexingWarn: null
+      };
+
+      setAttachments((prev) => {
+        const withoutDup = prev.filter((item) => item.documentId !== documentId);
+        return [...withoutDup, nextAttachment];
+      });
+
       if (immediateStatus === "failed" || result?.status === "partial") {
-        setAttachment({
-          name: file.name,
-          documentId,
-          indexingLoading: false,
-          indexingReady: false,
-          indexingError: data.indexingError || "Indexing could not be queued.",
-          indexingWarn: null
-        });
         toast.error(data.indexingError || "Document uploaded but indexing failed.");
-        uploadAnchorSessionRef.current = null;
         return;
       }
 
-      const loading = immediateStatus !== "completed";
-
-      setAttachment({
-        name: file.name,
-        documentId,
-        indexingLoading: loading,
-        indexingReady: immediateStatus === "completed",
-        indexingError: null,
-        indexingWarn: null
-      });
-
       if (immediateStatus === "completed") {
-        toast.success("Document ready.");
+        toast.success(`${file.name} ready.`);
         appendPinnedNoticeForFile(file.name);
       } else {
-        toast.success("File uploaded — building search index…", { duration: 2800 });
+        toast.success(`${file.name} uploaded — indexing…`, { duration: 2800 });
       }
     } catch (err) {
       console.error("Upload failed", err);
-      toast.error("Failed to upload document", { id: toastId });
-      uploadAnchorSessionRef.current = null;
+      toast.error(err.message || "Failed to upload document", { id: toastId });
     }
   }
 
   function appendPinnedNoticeForFile(label) {
-    const targetId = uploadAnchorSessionRef.current;
+    const targetId = uploadAnchorSessionRef.current || activeSessionId;
     if (!targetId) return;
     setSessions((prev) =>
       prev.map((session) =>
@@ -516,6 +558,28 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
     navigate(`/chat/${sessionId}`);
     if (window.matchMedia("(max-width: 920px)").matches) {
       setSidebarOpen(false);
+    }
+  }
+
+  async function handleRenameChat(chatId, title) {
+    try {
+      if (String(chatId).startsWith("local-")) {
+        setSessions((prev) =>
+          prev.map((session) => (session.id === chatId ? { ...session, title } : session))
+        );
+        return;
+      }
+      const res = await renameChat(chatId, title);
+      const nextTitle = res?.data?.title || title;
+      setSessions((prev) =>
+        prev.map((session) =>
+          session.id === chatId ? { ...session, title: nextTitle } : session
+        )
+      );
+      toast.success("Conversation renamed.");
+    } catch (err) {
+      console.error("Failed to rename chat", err);
+      toast.error(err.message || "Could not rename chat.");
     }
   }
 
@@ -567,6 +631,7 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
         onClose={() => setSidebarOpen(false)}
         isDesktopCollapsed={isDesktopCollapsed}
         onDeleteChat={handleDeleteChat}
+        onRenameChat={handleRenameChat}
         onOpenSettings={() => setSettingsOpen(true)}
       />
       {settingsOpen ? (
@@ -642,8 +707,10 @@ export default function ChatPage({ user, onLogout, theme, onSetTheme }) {
           onSend={sendMessage}
           loading={loading}
           onPdfPick={handlePdfPick}
-          attachment={attachment}
-          onClearAttachment={() => setAttachment(null)}
+          attachments={attachments}
+          onClearAttachment={(documentId) =>
+            setAttachments((prev) => prev.filter((item) => item.documentId !== documentId))
+          }
           microphoneEnabled={Boolean(userSettings.microphoneEnabled)}
         />
       </section>
